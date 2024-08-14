@@ -98,6 +98,12 @@ if (WITH_WINDOWS_UTF8_FILENAMES)
   add_definitions(-DROCKSDB_WINDOWS_UTF8_FILENAMES)
 endif()
 option(ROCKSDB_BUILD_SHARED "Build shared versions of the RocksDB libraries" ON)
+option(WITH_TERARKDB_NAMESPACE "namespace" "terarkdb")
+
+if(NOT WITH_TERARKDB_NAMESPACE)
+  SET(WITH_TERARKDB_NAMESPACE "terarkdb")
+endif()
+MESSAGE(STATUS "terarkdb namespace: " ${WITH_TERARKDB_NAMESPACE})
 
 if( NOT DEFINED CMAKE_CXX_STANDARD )
   set(CMAKE_CXX_STANDARD 17)
@@ -896,6 +902,7 @@ set(SOURCES
         util/udt_util.cc
         util/write_batch_util.cc
         util/xxhash.cc
+        util/lazy_buffer.cc
         utilities/agg_merge/agg_merge.cc
         utilities/backup/backup_engine.cc
         utilities/blob_db/blob_compaction_filter.cc
@@ -1138,6 +1145,8 @@ string(REGEX REPLACE "[^0-9: /-]+" "" GIT_DATE "${GIT_DATE}")
 
 set(BUILD_VERSION_CC ${CMAKE_BINARY_DIR}/build_version.cc)
 configure_file(util/build_version.cc.in ${BUILD_VERSION_CC} @ONLY)
+
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/rocksdb/terark_namespace.h.in ${CMAKE_CURRENT_SOURCE_DIR}/include/rocksdb/terark_namespace.h)
 
 add_library(${ROCKSDB_STATIC_LIB} STATIC ${SOURCES} ${BUILD_VERSION_CC})
 target_include_directories(${ROCKSDB_STATIC_LIB} PUBLIC
