@@ -32,6 +32,8 @@
 #include "rocksdb/version.h"
 #include "rocksdb/wide_columns.h"
 
+#include "rocksdb/terark_namespace.h"
+
 #ifdef _WIN32
 // Windows API macro interference
 #undef DeleteFile
@@ -607,65 +609,36 @@ class DB {
   // Returns OK on success. Returns NotFound and an empty value in "*value" if
   // there is no entry for "key". Returns some other non-OK status on error.
   // NOTE: Pure virtual => was virtual before
-  virtual Status Get(const ReadOptions& options,
-                     ColumnFamilyHandle* column_family, const Slice& key,
-                     PinnableSlice* value, std::string* timestamp) = 0;
-
-  // The timestamp of the key is returned if a non-null timestamp pointer is
-  // passed, and value is returned as a string
-  // NOTE: virtual final => disallow override (was previously allowed)
   virtual inline Status Get(const ReadOptions& options,
                             ColumnFamilyHandle* column_family, const Slice& key,
-                            std::string* value, std::string* timestamp) final {
-    assert(value != nullptr);
-    PinnableSlice pinnable_val(value);
-    assert(!pinnable_val.IsPinned());
-    auto s = Get(options, column_family, key, &pinnable_val, timestamp);
-    if (s.ok() && pinnable_val.IsPinned()) {
-      value->assign(pinnable_val.data(), pinnable_val.size());
-    }  // else value is already assigned
-    return s;
+                            std::string* value) {
+    if (value != nullptr) {
+      LazyBuffer lazy_val(value);
+      auto s = Get(options, column_family, key, &lazy_val);
+      if (s.ok()) {
+        s = std::move(lazy_val).dump(value);
+      }
+      return s;
+    } else {
+      return Get(options, column_family, key,
+                 static_cast<LazyBuffer*>(nullptr));
+    }
   }
-
-  // No timestamp, and value is returned in a PinnableSlice
-  // NOTE: virtual final => disallow override (was previously allowed)
   virtual Status Get(const ReadOptions& options,
                      ColumnFamilyHandle* column_family, const Slice& key,
-                     PinnableSlice* value) final {
-    return Get(options, column_family, key, value, nullptr);
+                     LazyBuffer* value) = 0;
+  virtual Status Get(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const Slice& key) {
+    return Get(options, column_family, key, static_cast<LazyBuffer*>(nullptr));
   }
-
-  // No timestamp, and the value is returned as a string
-  // NOTE: virtual final => disallow override (was previously allowed)
-  virtual inline Status Get(const ReadOptions& options,
-                            ColumnFamilyHandle* column_family, const Slice& key,
-                            std::string* value) final {
-    assert(value != nullptr);
-    PinnableSlice pinnable_val(value);
-    assert(!pinnable_val.IsPinned());
-    auto s = Get(options, column_family, key, &pinnable_val);
-    if (s.ok() && pinnable_val.IsPinned()) {
-      value->assign(pinnable_val.data(), pinnable_val.size());
-    }  // else value is already assigned
-    return s;
-  }
-
-  // Gets a key in the default column family, returns the value as a string,
-  // and no timestamp returned
-  // NOTE: virtual final => disallow override (was previously allowed)
   virtual Status Get(const ReadOptions& options, const Slice& key,
-                     std::string* value) final {
+                     std::string* value) {
     return Get(options, DefaultColumnFamily(), key, value);
   }
-
-  // Gets a key in the default column family, returns the value as a string,
-  // and timestamp of the key is returned if timestamp parameter is non-null
-  // NOTE: virtual final => disallow override (was previously allowed)
-  virtual Status Get(const ReadOptions& options, const Slice& key,
-                     std::string* value, std::string* timestamp) final {
-    return Get(options, DefaultColumnFamily(), key, value, timestamp);
+  virtual Status Get(const ReadOptions& options, const Slice& key) {
+    return Get(options, DefaultColumnFamily(), key,
+               static_cast<LazyBuffer*>(nullptr));
   }
-
   // If the column family specified by "column_family" contains an entry for
   // "key", return it as a wide-column entity in "*columns". If the entry is a
   // wide-column entity, return it as-is; if it is a plain key-value, return it
