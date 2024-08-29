@@ -96,6 +96,9 @@ BlobDBImpl::BlobDBImpl(const std::string& dbname,
                   ? dbname + "/" + bdb_options_.blob_dir
                   : bdb_options_.blob_dir;
   file_options_.bytes_per_sync = blob_db_options.bytes_per_sync;
+  int capacity = 1024;
+  auto cache = NewLRUCache(capacity);
+  drop_cache = cache;
 }
 
 BlobDBImpl::~BlobDBImpl() {
@@ -965,13 +968,15 @@ class BlobDBImpl::BlobInserter : public WriteBatch::Handler {
   BlobDBImpl* blob_db_impl_;
   uint32_t default_cf_id_;
   WriteBatch batch_;
+  std::shared_ptr<Cache> drop_cache;
 
  public:
   BlobInserter(const WriteOptions& options, BlobDBImpl* blob_db_impl,
-               uint32_t default_cf_id)
+               uint32_t default_cf_id, std::shared_ptr<Cache> drop_cache)
       : options_(options),
         blob_db_impl_(blob_db_impl),
-        default_cf_id_(default_cf_id) {}
+        default_cf_id_(default_cf_id),
+        drop_cache(drop_cache) {}
 
   WriteBatch* batch() { return &batch_; }
 
@@ -992,6 +997,8 @@ class BlobDBImpl::BlobInserter : public WriteBatch::Handler {
           "Blob DB doesn't support non-default column family.");
     }
     Status s = WriteBatchInternal::Delete(&batch_, column_family_id, key);
+    const Cache::CacheItemHelper* helper = nullptr;     // try dummy helper
+    drop_cache->Insert(key, nullptr, helper, 0);
     return s;
   }
 
@@ -1026,7 +1033,7 @@ Status BlobDBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
       static_cast_with_check<ColumnFamilyHandleImpl>(DefaultColumnFamily())
           ->GetID();
   Status s;
-  BlobInserter blob_inserter(options, this, default_cf_id);
+  BlobInserter blob_inserter(options, this, default_cf_id, drop_cache);
   {
     // Release write_mutex_ before DB write to avoid race condition with
     // flush begin listener, which also require write_mutex_ to sync

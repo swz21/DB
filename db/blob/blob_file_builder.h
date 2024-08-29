@@ -76,6 +76,8 @@ class BlobFileBuilder {
  private:
   bool IsBlobFileOpen() const;
   Status OpenBlobFileIfNeeded();
+  Status OpenHotBlobFileIfNeeded();
+  Status OpenColdBlobFileIfNeeded();
   Status CompressBlobIfNeeded(Slice* blob, std::string* compressed_blob) const;
   Status WriteBlobToFile(const Slice& key, const Slice& blob,
                          uint64_t* blob_file_number, uint64_t* blob_offset);

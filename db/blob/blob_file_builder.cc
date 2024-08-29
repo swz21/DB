@@ -105,8 +105,14 @@ Status BlobFileBuilder::Add(const Slice& key, const Slice& value,
     return Status::OK();
   }
 
-  {
-    const Status s = OpenBlobFileIfNeeded();
+  bool is_in_drop_cache = false;  // TODO
+  if (is_in_drop_cache) {
+    const Status s = OpenHotBlobFileIfNeeded();
+    if (!s.ok()) {
+      return s;
+    }
+  } else {
+    const Status s = OpenColdBlobFileIfNeeded();
     if (!s.ok()) {
       return s;
     }
@@ -167,6 +173,172 @@ Status BlobFileBuilder::Finish() {
 bool BlobFileBuilder::IsBlobFileOpen() const { return !!writer_; }
 
 Status BlobFileBuilder::OpenBlobFileIfNeeded() {
+  if (IsBlobFileOpen()) {
+    return Status::OK();
+  }
+
+  assert(!blob_count_);
+  assert(!blob_bytes_);
+
+  assert(file_number_generator_);
+  const uint64_t blob_file_number = file_number_generator_();
+
+  assert(immutable_options_);
+  assert(!immutable_options_->cf_paths.empty());
+  std::string blob_file_path =
+      BlobFileName(immutable_options_->cf_paths.front().path, blob_file_number);
+
+  if (blob_callback_) {
+    blob_callback_->OnBlobFileCreationStarted(
+        blob_file_path, column_family_name_, job_id_, creation_reason_);
+  }
+
+  std::unique_ptr<FSWritableFile> file;
+
+  {
+    assert(file_options_);
+    Status s = NewWritableFile(fs_, blob_file_path, &file, *file_options_);
+
+    TEST_SYNC_POINT_CALLBACK(
+        "BlobFileBuilder::OpenBlobFileIfNeeded:NewWritableFile", &s);
+
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  // Note: files get added to blob_file_paths_ right after the open, so they
+  // can be cleaned up upon failure. Contrast this with blob_file_additions_,
+  // which only contains successfully written files.
+  assert(blob_file_paths_);
+  blob_file_paths_->emplace_back(std::move(blob_file_path));
+
+  assert(file);
+  file->SetIOPriority(write_options_->rate_limiter_priority);
+  file->SetWriteLifeTimeHint(write_hint_);
+  FileTypeSet tmp_set = immutable_options_->checksum_handoff_file_types;
+  Statistics* const statistics = immutable_options_->stats;
+  std::unique_ptr<WritableFileWriter> file_writer(new WritableFileWriter(
+      std::move(file), blob_file_paths_->back(), *file_options_,
+      immutable_options_->clock, io_tracer_, statistics,
+      Histograms::BLOB_DB_BLOB_FILE_WRITE_MICROS, immutable_options_->listeners,
+      immutable_options_->file_checksum_gen_factory.get(),
+      tmp_set.Contains(FileType::kBlobFile), false));
+
+  constexpr bool do_flush = false;
+
+  std::unique_ptr<BlobLogWriter> blob_log_writer(new BlobLogWriter(
+      std::move(file_writer), immutable_options_->clock, statistics,
+      blob_file_number, immutable_options_->use_fsync, do_flush));
+
+  constexpr bool has_ttl = false;
+  constexpr ExpirationRange expiration_range;
+
+  BlobLogHeader header(column_family_id_, blob_compression_type_, has_ttl,
+                       expiration_range);
+
+  {
+    Status s = blob_log_writer->WriteHeader(*write_options_, header);
+
+    TEST_SYNC_POINT_CALLBACK(
+        "BlobFileBuilder::OpenBlobFileIfNeeded:WriteHeader", &s);
+
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  writer_ = std::move(blob_log_writer);
+
+  assert(IsBlobFileOpen());
+
+  return Status::OK();
+}
+
+Status BlobFileBuilder::OpenHotBlobFileIfNeeded() {
+  if (IsBlobFileOpen()) {
+    return Status::OK();
+  }
+
+  assert(!blob_count_);
+  assert(!blob_bytes_);
+
+  assert(file_number_generator_);
+  const uint64_t blob_file_number = file_number_generator_();
+
+  assert(immutable_options_);
+  assert(!immutable_options_->cf_paths.empty());
+  std::string blob_file_path =
+      BlobFileName(immutable_options_->cf_paths.front().path, blob_file_number);
+
+  if (blob_callback_) {
+    blob_callback_->OnBlobFileCreationStarted(
+        blob_file_path, column_family_name_, job_id_, creation_reason_);
+  }
+
+  std::unique_ptr<FSWritableFile> file;
+
+  {
+    assert(file_options_);
+    Status s = NewWritableFile(fs_, blob_file_path, &file, *file_options_);
+
+    TEST_SYNC_POINT_CALLBACK(
+        "BlobFileBuilder::OpenBlobFileIfNeeded:NewWritableFile", &s);
+
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  // Note: files get added to blob_file_paths_ right after the open, so they
+  // can be cleaned up upon failure. Contrast this with blob_file_additions_,
+  // which only contains successfully written files.
+  assert(blob_file_paths_);
+  blob_file_paths_->emplace_back(std::move(blob_file_path));
+
+  assert(file);
+  file->SetIOPriority(write_options_->rate_limiter_priority);
+  file->SetWriteLifeTimeHint(write_hint_);
+  FileTypeSet tmp_set = immutable_options_->checksum_handoff_file_types;
+  Statistics* const statistics = immutable_options_->stats;
+  std::unique_ptr<WritableFileWriter> file_writer(new WritableFileWriter(
+      std::move(file), blob_file_paths_->back(), *file_options_,
+      immutable_options_->clock, io_tracer_, statistics,
+      Histograms::BLOB_DB_BLOB_FILE_WRITE_MICROS, immutable_options_->listeners,
+      immutable_options_->file_checksum_gen_factory.get(),
+      tmp_set.Contains(FileType::kBlobFile), false));
+
+  constexpr bool do_flush = false;
+
+  std::unique_ptr<BlobLogWriter> blob_log_writer(new BlobLogWriter(
+      std::move(file_writer), immutable_options_->clock, statistics,
+      blob_file_number, immutable_options_->use_fsync, do_flush));
+
+  constexpr bool has_ttl = false;
+  constexpr ExpirationRange expiration_range;
+
+  BlobLogHeader header(column_family_id_, blob_compression_type_, has_ttl,
+                       expiration_range);
+
+  {
+    Status s = blob_log_writer->WriteHeader(*write_options_, header);
+
+    TEST_SYNC_POINT_CALLBACK(
+        "BlobFileBuilder::OpenBlobFileIfNeeded:WriteHeader", &s);
+
+    if (!s.ok()) {
+      return s;
+    }
+  }
+
+  writer_ = std::move(blob_log_writer);
+
+  assert(IsBlobFileOpen());
+
+  return Status::OK();
+}
+
+Status BlobFileBuilder::OpenColdBlobFileIfNeeded() {
   if (IsBlobFileOpen()) {
     return Status::OK();
   }

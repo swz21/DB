@@ -508,6 +508,9 @@ class BlobDBImpl : public BlobDB {
   int disable_file_deletions_ = 0;
 
   uint32_t debug_level_;
+
+  // DropCache
+  std::shared_ptr<Cache> drop_cache = nullptr;
 };
 
 }  // namespace blob_db
